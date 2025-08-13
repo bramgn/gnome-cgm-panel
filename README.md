@@ -16,7 +16,6 @@ Monitor your blood glucose levels directly from the Gnome Shell panel with suppo
 
 ## Screenshots
 
-![Panel Display](screenshots/panel.png)
 ![Graph Popup](screenshots/popup.png)
 
 ## Installation
