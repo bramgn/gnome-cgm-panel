@@ -122,4 +122,5 @@ This extension is not a medical device and should not be used as the sole basis 
 ## Acknowledgments
 
 - Thanks to the Nightscout community for their open-source diabetes management platform
+- Thanks to Timo Schlueter for his [LibreLinkUp](https://github.com/timoschlueter/nightscout-librelink-up) project, which helped me adding the LibreLink provider integration
 - Inspired by various CGM monitoring tools and the need for desktop integration
