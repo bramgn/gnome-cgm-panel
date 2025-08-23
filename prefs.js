@@ -14,10 +14,15 @@ export default class CGMPreferences extends ExtensionPreferences {
     fillPreferencesWindow(window) {
         // Make all objects local to this function to avoid storing them as instance properties
         const config = new Config();
+        let testSession = null; // Track session for cleanup
         
         // Setup cleanup on window close
         window.connect('close-request', () => {
-            // Clean up any resources if needed
+            // Clean up any active sessions
+            if (testSession) {
+                testSession.abort();
+                testSession = null;
+            }
             return false; // Allow window to close
         });
 
@@ -116,17 +121,19 @@ export default class CGMPreferences extends ExtensionPreferences {
             button.label = _('Testing...');
             button.sensitive = false;
 
-            const session = new Soup.Session({ timeout: 10 });
+            // Create session for this test
+            testSession = new Soup.Session({ timeout: 10 });
             const message = Soup.Message.new('GET', url);
             
             if (!message) {
                 showToast(window, 'Could not create Soup message. Check URL format.');
                 button.label = _('Test Connection');
                 button.sensitive = true;
+                testSession = null;
                 return;
             }
 
-            session.send_and_read_async(message, GLib.PRIORITY_DEFAULT, null, (session, result) => {
+            testSession.send_and_read_async(message, GLib.PRIORITY_DEFAULT, null, (session, result) => {
                 try {
                     const bytes = session.send_and_read_finish(result);
                     const status = message.get_status();
@@ -153,9 +160,13 @@ export default class CGMPreferences extends ExtensionPreferences {
                 } catch (error) {
                     showToast(window, `✗ Connection failed: ${error.message}`);
                 } finally {
-                    // Always reset button state
+                    // Always reset button state and cleanup session
                     button.label = _('Test Connection');
                     button.sensitive = true;
+                    if (testSession) {
+                        testSession.abort();
+                        testSession = null;
+                    }
                 }
             });
         };
