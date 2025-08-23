@@ -5,7 +5,6 @@ import { LibreLinkProvider } from './providers/LibreLinkProvider.js';
 import GObject from 'gi://GObject';
 import St from 'gi://St';
 import Clutter from 'gi://Clutter';
-import Soup from 'gi://Soup';
 import GLib from 'gi://GLib';
 import Gio from 'gi://Gio';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
@@ -317,8 +316,6 @@ class MyExtension extends PanelMenu.Button {
             this._fetchBG();
             this._fetchHistory();
         }
-        
-        // Rest of your existing _reloadConfig code...
     }
 
     _startTimer() {
@@ -695,40 +692,19 @@ export default class CGMWidgetExtension extends Extension {
     }
 
     enable() {
-        try {
-            console.log('Enabling CGM extension...');
-            this.extension = new MyExtension();
-            this.extension.extension = this; // Pass the extension object
-            Main.panel.addToStatusArea('nightscout-cgm', this.extension);
-            console.log('CGM extension enabled successfully');
-        } catch (error) {
-            console.error(`Failed to enable CGM extension: ${error.message}`);
-            console.error(error.stack);
-        }
+        console.log('Enabling CGM extension...');
+        this.extension = new MyExtension();
+        this.extension.extension = this;
+        Main.panel.addToStatusArea('nightscout-cgm', this.extension);
+        console.log('CGM extension enabled successfully');
     }
-    
+
     disable() {
-        try {
-            console.log('Disabling CGM extension...');
-            if (this.extension) {
-                // Set the destroyed flag immediately
-                this.extension._isDestroyed = true;
-                
-                // Remove from status area IMMEDIATELY - this is critical
-                Main.panel.statusArea['nightscout-cgm'] = null;
-                
-                // Now do the cleanup
-                this.extension.destroy();
-                this.extension = null;
-            }
-            console.log('CGM extension disabled successfully');
-        } catch (error) {
-            console.error(`Error disabling CGM extension: ${error.message}`);
-            // Force cleanup even if there was an error
-            try {
-                Main.panel.statusArea['nightscout-cgm'] = null;
-            } catch (e) {}
+        console.log('Disabling CGM extension...');
+        if (this.extension) {
+            this.extension.destroy();
             this.extension = null;
         }
+        console.log('CGM extension disabled successfully');
     }
 }
