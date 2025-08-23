@@ -53,6 +53,13 @@ class MyExtension extends PanelMenu.Button {
         this._lastFetchTime = 0;
         this._lastNotifiedState = null; // To prevent notification spam
         
+        // Initialize timeout references
+        this._timer = null;
+        this._historyTimer = null;
+        this._configReloadTimeout = null;
+        this._initTimeout = null;
+        this._retryTimeouts = []; // Array to track retry timeouts
+        
         // Load config and cache
         this._config = new Config();
         this._cache = new Cache();
@@ -131,7 +138,9 @@ class MyExtension extends PanelMenu.Button {
                         GLib.Source.remove(this._configReloadTimeout);
                     }
                     this._configReloadTimeout = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 1, () => {
-                        this._reloadConfig();
+                        if (!this._isDestroyed) {
+                            this._reloadConfig();
+                        }
                         this._configReloadTimeout = null;
                         return GLib.SOURCE_REMOVE;
                     });
@@ -263,12 +272,13 @@ class MyExtension extends PanelMenu.Button {
         }
 
         // Initial data fetch with small delay
-        GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 2, () => {
+        this._initTimeout = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 2, () => {
             if (!this._isDestroyed) {
                 this._fetchBG();
                 this._fetchHistory();
                 this._startTimer();
             }
+            this._initTimeout = null;
             return GLib.SOURCE_REMOVE;
         });
     }
@@ -379,20 +389,28 @@ class MyExtension extends PanelMenu.Button {
             this._log(`${type} fetch failed (attempt ${this._retryCount}/${CONSTANTS.RETRY_MAX}), will retry...`);
             
             const retryDelay = Math.min(30, Math.pow(2, this._retryCount - 1) * 5);
-            GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, retryDelay, () => {
+            const retryTimeout = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, retryDelay, () => {
                 if (!this._isDestroyed) {
                     if (type === 'BG') this._fetchBG();
                     else if (type === 'History') this._fetchHistory();
                 }
+                // Remove this timeout from tracking array
+                this._retryTimeouts = this._retryTimeouts.filter(t => t !== retryTimeout);
                 return GLib.SOURCE_REMOVE;
             });
+            this._retryTimeouts.push(retryTimeout);
         } else {
             this._log(`${type} fetch failed after ${CONSTANTS.RETRY_MAX} attempts, giving up for now.`);
             if (!this._currentBG && type === 'BG') {
                 this._label.set_text(`${CONSTANTS.PANEL_LABEL_PREFIX}ERR`);
                 this._setLabelColor('gray');
             }
-            GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 300, () => { this._retryCount = 0; return GLib.SOURCE_REMOVE; });
+            const resetTimeout = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, 300, () => { 
+                this._retryCount = 0; 
+                this._retryTimeouts = this._retryTimeouts.filter(t => t !== resetTimeout);
+                return GLib.SOURCE_REMOVE; 
+            });
+            this._retryTimeouts.push(resetTimeout);
         }
     }
 
@@ -426,6 +444,7 @@ class MyExtension extends PanelMenu.Button {
                 this._historyFetchInProgress = false;
             });
     }
+    
     _reprocessHistory() {
         if (!this._rawHistoryEntries || this._rawHistoryEntries.length === 0) {
             this._graph.setData([]);
@@ -621,15 +640,26 @@ class MyExtension extends PanelMenu.Button {
         this._log('Destroying CGM extension...');
         this._isDestroyed = true;
         
+        // Clean up all timeouts
         if (this._timer) GLib.Source.remove(this._timer);
         if (this._historyTimer) GLib.Source.remove(this._historyTimer);
         if (this._configReloadTimeout) GLib.Source.remove(this._configReloadTimeout);
+        if (this._initTimeout) GLib.Source.remove(this._initTimeout);
+        
+        // Clean up all retry timeouts
+        this._retryTimeouts.forEach(timeout => {
+            if (timeout) GLib.Source.remove(timeout);
+        });
+        
         if (this._monitor) this._monitor.cancel();
         if (this._session) this._session.abort();
         
+        // Clear references
         this._timer = null;
         this._historyTimer = null;
         this._configReloadTimeout = null;
+        this._initTimeout = null;
+        this._retryTimeouts = [];
         this._monitor = null;
         this._session = null;
         this._graph = null;
@@ -698,7 +728,7 @@ export default class CGMWidgetExtension extends Extension {
         Main.panel.addToStatusArea('nightscout-cgm', this.extension);
         console.log('CGM extension enabled successfully');
     }
-
+    
     disable() {
         console.log('Disabling CGM extension...');
         if (this.extension) {
