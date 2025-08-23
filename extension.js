@@ -522,6 +522,8 @@ class MyExtension extends PanelMenu.Button {
         
         let displayValue = this._getDisplayValue();
         let trendArrow = this._calculateTrend();
+        let delta = this._calculateDelta();
+        let deltaText = this._formatDelta(delta);
         
         this._label.set_text(`${CONSTANTS.PANEL_LABEL_PREFIX}${displayValue}${trendArrow ? ' ' + trendArrow : ''}`);
         
@@ -530,6 +532,15 @@ class MyExtension extends PanelMenu.Button {
         }
         if (this._timeLabel && this._lastUpdate) {
             this._timeLabel.set_text(`Updated: ${this._lastUpdate.toLocaleTimeString([], { hourCycle: 'h23' })}`);
+        }
+
+        if (this._deltaLabel) {
+            if (deltaText) {
+                this._deltaLabel.set_text(`Change: ${deltaText}`);
+                this._deltaLabel.show();
+            } else {
+                this._deltaLabel.hide();
+            }
         }
     }
     
@@ -706,12 +717,83 @@ class MyExtension extends PanelMenu.Button {
         timeLabelItem.add_child(this._timeLabel);
         this.menu.addMenuItem(timeLabelItem);
 
+        this._deltaLabel = new St.Label({ text: '', style: 'font-size: 12px; color: #ccc; text-align: center;' });
+        const deltaLabelItem = new PopupMenu.PopupBaseMenuItem({ reactive: false });
+        deltaLabelItem.add_child(this._deltaLabel);
+        this.menu.addMenuItem(deltaLabelItem);
+
         this._tirLabel = new St.Label({ text: 'Time in Range: --%', style: 'font-size: 12px; color: #888; text-align: center;' });
         const tirLabelItem = new PopupMenu.PopupBaseMenuItem({ reactive: false });
         tirLabelItem.add_child(this._tirLabel);
         this.menu.addMenuItem(tirLabelItem);
         
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+    }
+
+    _calculateDelta() {
+        if (!this._rawHistoryEntries || this._rawHistoryEntries.length < 2) {
+            return null;
+        }
+        
+        // Get the most recent readings, sorted by time
+        let recent = this._rawHistoryEntries
+            .filter(e => e.sgv != null && !isNaN(e.sgv))
+            .sort((a, b) => new Date(b.dateString || b.date) - new Date(a.dateString || a.date))
+            .slice(0, 10); // Look at up to 10 recent readings
+        
+        if (recent.length < 2) return null;
+        
+        let newest = recent[0];
+        let comparison = null;
+        
+        // Find a reading from 15-30 minutes ago for delta calculation
+        let newestTime = new Date(newest.dateString || newest.date);
+        
+        for (let i = 1; i < recent.length; i++) {
+            let entryTime = new Date(recent[i].dateString || recent[i].date);
+            let minutesAgo = (newestTime - entryTime) / (1000 * 60);
+            
+            // Look for reading between 10-30 minutes ago (flexible for different CGM intervals)
+            if (minutesAgo >= 10 && minutesAgo <= 30) {
+                comparison = recent[i];
+                break;
+            }
+        }
+        
+        // If no reading in that range, use the one closest to 15 minutes ago
+        if (!comparison && recent.length >= 2) {
+            comparison = recent[1]; // Just use the second most recent
+        }
+        
+        if (!comparison) return null;
+        
+        let deltaValue = newest.sgv - comparison.sgv;
+        
+        // Convert to user's preferred units
+        if (this._units === 'mmol/L') {
+            deltaValue = deltaValue / 18;
+        }
+        
+        return {
+            value: deltaValue,
+            minutes: Math.round((newestTime - new Date(comparison.dateString || comparison.date)) / (1000 * 60))
+        };
+    }
+    
+    _formatDelta(delta) {
+        if (!delta) return '';
+        
+        let sign = delta.value >= 0 ? '+' : '';
+        let value = Math.abs(delta.value);
+        let formattedValue;
+        
+        if (this._units === 'mmol/L') {
+            formattedValue = value.toFixed(1);
+        } else {
+            formattedValue = Math.round(value).toString();
+        }
+        
+        return `${sign}${formattedValue} (${delta.minutes}min)`;
     }
 });
 
