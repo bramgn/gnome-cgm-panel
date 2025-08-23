@@ -536,7 +536,7 @@ class MyExtension extends PanelMenu.Button {
 
         if (this._deltaLabel) {
             if (deltaText) {
-                this._deltaLabel.set_text(`Change: ${deltaText}`);
+                this._deltaLabel.set_text(`Delta: ${deltaText}`);
                 this._deltaLabel.show();
             } else {
                 this._deltaLabel.hide();
@@ -712,21 +712,21 @@ class MyExtension extends PanelMenu.Button {
         bgLabelItem.add_child(this._bgLabel);
         this.menu.addMenuItem(bgLabelItem);
         
-        this._timeLabel = new St.Label({ text: 'Never updated', style: 'font-size: 12px; color: #888; text-align: center;' });
-        const timeLabelItem = new PopupMenu.PopupBaseMenuItem({ reactive: false });
-        timeLabelItem.add_child(this._timeLabel);
-        this.menu.addMenuItem(timeLabelItem);
-
         this._deltaLabel = new St.Label({ text: '', style: 'font-size: 12px; color: #ccc; text-align: center;' });
         const deltaLabelItem = new PopupMenu.PopupBaseMenuItem({ reactive: false });
         deltaLabelItem.add_child(this._deltaLabel);
         this.menu.addMenuItem(deltaLabelItem);
 
-        this._tirLabel = new St.Label({ text: 'Time in Range: --%', style: 'font-size: 12px; color: #888; text-align: center;' });
+        this._tirLabel = new St.Label({ text: 'Time in Range: --%', style: 'font-size: 12px; color: #ccc; text-align: center;' });
         const tirLabelItem = new PopupMenu.PopupBaseMenuItem({ reactive: false });
         tirLabelItem.add_child(this._tirLabel);
         this.menu.addMenuItem(tirLabelItem);
         
+        this._timeLabel = new St.Label({ text: 'Never updated', style: 'font-size: 12px; color: #888; text-align: center;' });
+        const timeLabelItem = new PopupMenu.PopupBaseMenuItem({ reactive: false });
+        timeLabelItem.add_child(this._timeLabel);
+        this.menu.addMenuItem(timeLabelItem);
+
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
     }
 
