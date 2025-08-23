@@ -724,7 +724,6 @@ export default class CGMWidgetExtension extends Extension {
     enable() {
         console.log('Enabling CGM extension...');
         this.extension = new MyExtension();
-        this.extension.extension = this;
         Main.panel.addToStatusArea('nightscout-cgm', this.extension);
         console.log('CGM extension enabled successfully');
     }
