@@ -1,7 +1,6 @@
 // cgmGraph.js
 import St from 'gi://St';
 import Clutter from 'gi://Clutter';
-import Gdk from 'gi://Gdk';
 
 // Default colors, to be overridden by config
 const DEFAULT_COLORS = {
@@ -34,21 +33,55 @@ export class CGMGraph {
         this.setColors(colors);
     }
 
+    _parseColor(colorString) {
+        // Simple RGB color parser that works without Gdk
+        const rgbMatch = colorString.match(/rgb\((\d+),\s*(\d+),\s*(\d+)\)/);
+        if (rgbMatch) {
+            return [
+                parseInt(rgbMatch[1]) / 255.0,
+                parseInt(rgbMatch[2]) / 255.0,
+                parseInt(rgbMatch[3]) / 255.0
+            ];
+        }
+        
+        // Handle hex colors
+        const hexMatch = colorString.match(/^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i);
+        if (hexMatch) {
+            return [
+                parseInt(hexMatch[1], 16) / 255.0,
+                parseInt(hexMatch[2], 16) / 255.0,
+                parseInt(hexMatch[3], 16) / 255.0
+            ];
+        }
+        
+        // Fallback for common color names
+        const namedColors = {
+            'red': [1, 0, 0],
+            'green': [0, 1, 0],
+            'blue': [0, 0, 1],
+            'white': [1, 1, 1],
+            'black': [0, 0, 0],
+            'gray': [0.5, 0.5, 0.5],
+            'orange': [1, 0.65, 0],
+            'yellow': [1, 1, 0]
+        };
+        
+        const lowerColor = colorString.toLowerCase();
+        if (namedColors[lowerColor]) {
+            return namedColors[lowerColor];
+        }
+        
+        // Ultimate fallback - return white
+        this.log(`Could not parse color: ${colorString}, using white`);
+        return [1, 1, 1];
+    }
+
     setColors(colors) {
         this.colors = { ...DEFAULT_COLORS, ...colors };
         // Pre-parse colors for performance
         this.parsedColors = {};
         for (const key in this.colors) {
-            const rgba = new Gdk.RGBA();
-            if (rgba.parse(this.colors[key])) {
-                this.parsedColors[key] = [rgba.red, rgba.green, rgba.blue];
-            } else {
-                this.log(`Invalid color string for ${key}: ${this.colors[key]}`);
-                // Fallback to default if parsing fails
-                const defaultRgba = new Gdk.RGBA();
-                defaultRgba.parse(DEFAULT_COLORS[key]);
-                this.parsedColors[key] = [defaultRgba.red, defaultRgba.green, defaultRgba.blue];
-            }
+            this.parsedColors[key] = this._parseColor(this.colors[key]);
         }
         this.drawingArea.queue_repaint();
     }
