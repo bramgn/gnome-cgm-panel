@@ -21,7 +21,7 @@ const REQUIRED_HEADERS = {
     'connection': 'Keep-Alive',
     'content-type': 'application/json',
     'product': 'llu.ios',
-    'version': '4.12.0',
+    'version': '4.16.0',
 };
 
 export class LibreLinkProvider extends BaseProvider {
