@@ -299,18 +299,18 @@ export class LibreLinkProvider extends BaseProvider {
     }
 
     _convertTrendArrow(librelinkTrend) {
-        // LibreLink trend arrow values:
-        // 1 = DoubleUp (rising rapidly)
-        // 2 = SingleUp (rising)
+        // LibreLink trend arrow values (INVERTED - lower numbers = falling, higher = rising):
+        // 1 = SingleDown (falling)
+        // 2 = DoubleDown (falling rapidly) - ASSUMPTION, needs verification
         // 3 = Flat (stable)
-        // 4 = SingleDown (falling)
-        // 5 = DoubleDown (falling rapidly)
+        // 4 = SingleUp (rising) - ASSUMPTION, needs verification
+        // 5 = DoubleUp (rising rapidly)
         switch (librelinkTrend) {
-            case 1: return 'DoubleUp';
-            case 2: return 'SingleUp';
+            case 1: return 'SingleDown';
+            case 2: return 'DoubleDown';
             case 3: return 'Flat';
-            case 4: return 'SingleDown';
-            case 5: return 'DoubleDown';
+            case 4: return 'SingleUp';
+            case 5: return 'DoubleUp';
             default: return 'NONE';
         }
     }
