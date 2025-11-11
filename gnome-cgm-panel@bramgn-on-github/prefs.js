@@ -1,4 +1,4 @@
-// prefs.js
+// prefs.js - SECURE VERSION
 import Adw from 'gi://Adw';
 import Gtk from 'gi://Gtk';
 import Gdk from 'gi://Gdk';
@@ -203,16 +203,11 @@ export default class CGMPreferences extends ExtensionPreferences {
         });
         librelinkGroup.add(emailRow);
 
-        // LibreLink password
+        // LibreLink password - CHANGED: Don't load from config, use placeholder
         const passwordRow = new Adw.PasswordEntryRow({
-            title: _('LibreLink Password'),
-            text: librelinkConfig.password || '',
+            title: librelinkConfig.password ? '••••••••' : 'Enter password',
         });
-        passwordRow.connect('changed', () => {
-            let currentConfig = config.get('librelink') || {};
-            currentConfig.password = passwordRow.text;
-            config.set('librelink', currentConfig);
-        });
+        // We don't connect changed event here anymore - password is handled separately
         librelinkGroup.add(passwordRow);
 
         // LibreLink region
@@ -245,56 +240,66 @@ export default class CGMPreferences extends ExtensionPreferences {
         });
         librelinkGroup.add(regionRow);
 
-        // LibreLink test connection button
-        const testLibreLinkConnection = (button) => {
+        // LibreLink test connection button - UPDATED for secure password handling
+        const testLibreLinkConnection = async (button) => {
             const librelinkCurrentConfig = config.get('librelink') || {};
             
-            if (!librelinkCurrentConfig.email || !librelinkCurrentConfig.password) {
-                showToast(window, 'Please enter LibreLink email and password first');
+            if (!librelinkCurrentConfig.email) {
+                showToast(window, 'Please enter LibreLink email first');
+                return;
+            }
+
+            if (!passwordRow.text) {
+                showToast(window, 'Please enter LibreLink password first');
                 return;
             }
 
             button.label = _('Testing...');
             button.sensitive = false;
 
-            // Import the LibreLinkProvider for testing
-            import('./providers/LibreLinkProvider.js').then(({ LibreLinkProvider }) => {
+            try {
+                // Store password securely in keyring first
+                const storeSuccess = await config.storeLibreLinkPassword(passwordRow.text);
+                if (!storeSuccess) {
+                    throw new Error('Failed to store password securely');
+                }
+
+                // Import the LibreLinkProvider for testing
+                const { LibreLinkProvider } = await import('./providers/LibreLinkProvider.js');
                 const provider = new LibreLinkProvider(config, (message) => {
                     console.log(`[CGM LibreLink Test] ${message}`);
                 });
 
                 // Test the connection
-                provider.fetchCurrent()
-                    .then(data => {
-                        if (data && data.sgv) {
-                            const glucose = Math.round(data.sgv).toString();
-                            const units = config.get('units') || 'mg/dL';
-                            let displayGlucose = glucose;
-                            if (units === 'mmol/L') {
-                                displayGlucose = (glucose / 18).toFixed(1);
-                            }
-                            const timestamp = new Date(data.dateString).toLocaleTimeString();
-                            showToast(window, `✓ LibreLink Connected! Latest: ${displayGlucose} ${units} at ${timestamp}`);
-                        } else {
-                            showToast(window, '✓ LibreLink Connected but no current data found');
+                try {
+                    const data = await provider.fetchCurrent();
+                    if (data && data.sgv) {
+                        const glucose = Math.round(data.sgv).toString();
+                        const units = config.get('units') || 'mg/dL';
+                        let displayGlucose = glucose;
+                        if (units === 'mmol/L') {
+                            displayGlucose = (glucose / 18).toFixed(1);
                         }
-                    })
-                    .catch(error => {
-                        console.error('LibreLink test error:', error);
-                        showToast(window, `✗ LibreLink Failed: ${error.message}`);
-                    })
-                    .finally(() => {
-                        button.label = _('Test LibreLink Connection');
-                        button.sensitive = true;
-                        provider.destroy();
-                    });
-                    
-            }).catch(error => {
-                console.error('Failed to import LibreLinkProvider:', error);
-                showToast(window, '✗ Failed to load LibreLink provider');
+                        const timestamp = new Date(data.dateString).toLocaleTimeString();
+                        showToast(window, `✓ LibreLink Connected! Latest: ${displayGlucose} ${units} at ${timestamp}`);
+                    } else {
+                        showToast(window, '✓ LibreLink Connected but no current data found');
+                    }
+                } catch (fetchError) {
+                    console.error('LibreLink test error:', fetchError);
+                    showToast(window, `✗ LibreLink Failed: ${fetchError.message}`);
+                } finally {
+                    provider.destroy();
+                }
+            } catch (error) {
+                console.error('Failed to test LibreLink connection:', error);
+                showToast(window, `✗ LibreLink Failed: ${error.message}`);
+            } finally {
                 button.label = _('Test LibreLink Connection');
                 button.sensitive = true;
-            });
+                // Clear the password field for security
+                passwordRow.text = '';
+            }
         };
 
         const librelinkTestButton = new Gtk.Button({
@@ -312,6 +317,33 @@ export default class CGMPreferences extends ExtensionPreferences {
         librelinkTestRow.add_suffix(librelinkTestButton);
         librelinkGroup.add(librelinkTestRow);
 
+        // Add a button to clear stored LibreLink credentials
+        const clearCredentialsButton = new Gtk.Button({
+            label: _('Clear Stored Credentials'),
+            css_classes: ['destructive-action'],
+        });
+        clearCredentialsButton.connect('clicked', async () => {
+            try {
+                const success = await config.clearLibreLinkPassword();
+                if (success) {
+                    showToast(window, '✓ LibreLink credentials cleared from keyring');
+                    passwordRow.title = 'Enter password';
+                } else {
+                    showToast(window, '✗ Failed to clear credentials');
+                }
+            } catch (error) {
+                showToast(window, `✗ Error clearing credentials: ${error.message}`);
+            }
+        });
+
+        const clearCredentialsRow = new Adw.ActionRow({
+            title: _('Clear Stored Password'),
+            subtitle: _('Remove your LibreLink password from secure storage'),
+        });
+        clearCredentialsRow.add_suffix(clearCredentialsButton);
+        librelinkGroup.add(clearCredentialsRow);
+
+        // [Rest of the file remains the same - glucose thresholds, display settings, etc.]
         // Glucose thresholds group
         const thresholdGroup = new Adw.PreferencesGroup({
             title: _('Glucose Thresholds'),
