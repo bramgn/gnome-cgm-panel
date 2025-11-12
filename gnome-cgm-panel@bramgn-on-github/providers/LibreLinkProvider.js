@@ -1,4 +1,4 @@
-// providers/LibreLinkProvider.js
+// providers/LibreLinkProvider.js - SECURE VERSION
 import Soup from 'gi://Soup';
 import GLib from 'gi://GLib';
 import { BaseProvider } from './BaseProvider.js';
@@ -40,11 +40,12 @@ export class LibreLinkProvider extends BaseProvider {
 
     isConfigured() {
         const librelinkConfig = this.config.get('librelink');
-        return !!(librelinkConfig && librelinkConfig.email && librelinkConfig.password);
+        return !!(librelinkConfig && librelinkConfig.email);
+        // Note: We don't check password here since it's stored in keyring
     }
 
     getRequiredConfig() {
-        return ['librelink.email', 'librelink.password'];
+        return ['librelink.email']; // Password is handled separately via keyring
     }
 
     _getApiUrl() {
@@ -57,8 +58,22 @@ export class LibreLinkProvider extends BaseProvider {
         return this.authToken && this.tokenExpiry && new Date() < new Date(this.tokenExpiry);
     }
 
+    async _getPassword() {
+        try {
+            // Get password from secure keyring instead of config
+            const password = await this.config.getLibreLinkPassword();
+            if (!password) {
+                throw new Error('No LibreLink password found in keyring. Please check your settings.');
+            }
+            return password;
+        } catch (error) {
+            this.log(`Error retrieving password from keyring: ${error.message}`);
+            throw error;
+        }
+    }
+
     async _login() {
-        return new Promise((resolve, reject) => {
+        return new Promise(async (resolve, reject) => {
             const librelinkConfig = this.config.get('librelink');
             const apiUrl = this._getApiUrl();
             const url = `${apiUrl}/llu/auth/login`;
@@ -67,66 +82,74 @@ export class LibreLinkProvider extends BaseProvider {
             this.log(`- API URL: ${apiUrl}`);
             this.log(`- Region: ${librelinkConfig.region || 'EU'}`);
             this.log(`- Email: ${librelinkConfig.email ? `${librelinkConfig.email.substring(0, 3)}***` : 'NOT SET'}`);
-            this.log(`- Password: ${librelinkConfig.password ? '[SET]' : 'NOT SET'}`);
+            this.log(`- Password: [RETRIEVING FROM KEYRING]`);
             
-            const loginData = {
-                email: librelinkConfig.email,
-                password: librelinkConfig.password
-            };
+            try {
+                // Get password securely from keyring
+                const password = await this._getPassword();
+                
+                const loginData = {
+                    email: librelinkConfig.email,
+                    password: password
+                };
 
-            this.log(`Sending login request to: ${url}`);
-            const message = Soup.Message.new('POST', url);
-            
-            // Set required headers
-            Object.entries(REQUIRED_HEADERS).forEach(([key, value]) => {
-                message.get_request_headers().append(key, value);
-            });
+                this.log(`Sending login request to: ${url}`);
+                const message = Soup.Message.new('POST', url);
+                
+                // Set required headers
+                Object.entries(REQUIRED_HEADERS).forEach(([key, value]) => {
+                    message.get_request_headers().append(key, value);
+                });
 
-            const requestBody = JSON.stringify(loginData);
-            message.set_request_body_from_bytes('application/json', 
-                new GLib.Bytes(new TextEncoder().encode(requestBody)));
+                const requestBody = JSON.stringify(loginData);
+                message.set_request_body_from_bytes('application/json', 
+                    new GLib.Bytes(new TextEncoder().encode(requestBody)));
 
-            this.session.send_and_read_async(message, GLib.PRIORITY_DEFAULT, null, (session, result) => {
-                try {
-                    const bytes = session.send_and_read_finish(result);
-                    const decoder = new TextDecoder('utf-8');
-                    const response = decoder.decode(bytes.get_data());
-                    
-                    const status = message.get_status();
-                    this.log(`HTTP Status: ${status}`);
-                    
-                    if (!response || response.trim() === '') {
-                        throw new Error(`Empty response from LibreLink login (HTTP ${status})`);
+                this.session.send_and_read_async(message, GLib.PRIORITY_DEFAULT, null, (session, result) => {
+                    try {
+                        const bytes = session.send_and_read_finish(result);
+                        const decoder = new TextDecoder('utf-8');
+                        const response = decoder.decode(bytes.get_data());
+                        
+                        const status = message.get_status();
+                        this.log(`HTTP Status: ${status}`);
+                        
+                        if (!response || response.trim() === '') {
+                            throw new Error(`Empty response from LibreLink login (HTTP ${status})`);
+                        }
+                        
+                        const data = JSON.parse(response);
+                        this.log(`Parsed response status: ${data.status}`);
+                        
+                        if (data.status !== 0) {
+                            this.log(`Login error details: ${JSON.stringify(data, null, 2)}`);
+                            throw new Error(`Login failed: ${data.error?.description || data.error || 'Unknown error'}`);
+                        }
+
+                        if (!data.data || !data.data.authTicket) {
+                            this.log(`Invalid response structure: ${JSON.stringify(data, null, 2)}`);
+                            throw new Error('Invalid login response: no auth ticket');
+                        }
+
+                        this.authToken = data.data.authTicket.token;
+                        this.tokenExpiry = new Date(data.data.authTicket.expires * 1000);
+                        
+                        const userId = data.data.user.id.toString();
+                        this.accountId = GLib.compute_checksum_for_string(GLib.ChecksumType.SHA256, userId, -1);
+
+                        this.log(`LibreLink login successful!`);
+                        this.log(`Token expires: ${this.tokenExpiry}`);
+                        resolve();
+                        
+                    } catch (error) {
+                        this.log(`LibreLink login error: ${error.message}`);
+                        reject(error);
                     }
-                    
-                    const data = JSON.parse(response);
-                    this.log(`Parsed response status: ${data.status}`);
-                    
-                    if (data.status !== 0) {
-                        this.log(`Login error details: ${JSON.stringify(data, null, 2)}`);
-                        throw new Error(`Login failed: ${data.error?.description || data.error || 'Unknown error'}`);
-                    }
-
-                    if (!data.data || !data.data.authTicket) {
-                        this.log(`Invalid response structure: ${JSON.stringify(data, null, 2)}`);
-                        throw new Error('Invalid login response: no auth ticket');
-                    }
-
-                    this.authToken = data.data.authTicket.token;
-                    this.tokenExpiry = new Date(data.data.authTicket.expires * 1000);
-                    
-                    const userId = data.data.user.id.toString();
-                    this.accountId = GLib.compute_checksum_for_string(GLib.ChecksumType.SHA256, userId, -1);
-
-                    this.log(`LibreLink login successful!`);
-                    this.log(`Token expires: ${this.tokenExpiry}`);
-                    resolve();
-                    
-                } catch (error) {
-                    this.log(`LibreLink login error: ${error.message}`);
-                    reject(error);
-                }
-            });
+                });
+            } catch (error) {
+                this.log(`Failed to retrieve password from keyring: ${error.message}`);
+                reject(error);
+            }
         });
     }
 
