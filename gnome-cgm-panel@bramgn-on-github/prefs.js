@@ -7,7 +7,7 @@ import GLib from 'gi://GLib';
 import Soup from 'gi://Soup';
 
 import {ExtensionPreferences, gettext as _} from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
-
+import { LibreLinkProvider } from './providers/LibreLinkProvider.js';
 import { Config } from './config.js';
 
 export default class CGMPreferences extends ExtensionPreferences {
@@ -200,7 +200,12 @@ export default class CGMPreferences extends ExtensionPreferences {
             let currentConfig = config.get('librelink') || {};
             currentConfig.email = emailRow.text;
             config.set('librelink', currentConfig);
+            // Clear patient list when email changes
+            patientRow.model = null;
+            patientRow._patientIds = null;
+            patientInfoLabel.set_label('Email changed - please test connection to load patients');
         });
+
         librelinkGroup.add(emailRow);
 
         // LibreLink password - CHANGED: Don't load from config, use placeholder
@@ -237,40 +242,130 @@ export default class CGMPreferences extends ExtensionPreferences {
             let currentConfig = config.get('librelink') || {};
             currentConfig.region = regions[regionRow.selected];
             config.set('librelink', currentConfig);
+
+            // Clear patient list when region changes
+            patientRow.model = null;
+            patientRow._patientIds = null;
+            patientInfoLabel.set_label('Region changed - please test connection to load patients');
         });
+
         librelinkGroup.add(regionRow);
+
+        // Add the patient selection UI
+        const patientRow = new Adw.ComboRow({
+            title: _('LibreLink Patient'),
+            subtitle: _('Select the LibreLink patient whose data you want to display'),
+        });
+        librelinkGroup.add(patientRow);
+
+        const patientInfoLabel = new Gtk.Label({
+            label: '',
+            halign: Gtk.Align.START,
+        });
+        librelinkGroup.add(patientInfoLabel);
+
+        // Show stored patient name on initial load
+        const initialLibrelinkConfig = config.get('librelink') || {};
+        if (initialLibrelinkConfig.patientName) {
+            patientInfoLabel.set_label(`Selected patient: ${initialLibrelinkConfig.patientName}`);
+        }
+
+        // Patient list loader
+         const populatePatients = async () => {
+            patientRow.model = null;
+            patientInfoLabel.set_label(_('Loading patients...'));
+            
+            const provider = new LibreLinkProvider(config, console.log);
+            const patients = await provider.getPatients();
+
+            if (!patients || patients.length === 0) {
+                patientInfoLabel.set_label(_('No patients found or no data shared.'));
+                provider.destroy();
+                return;
+            }
+            
+            const patientModel = new Gtk.StringList();
+            patients.forEach(p => patientModel.append(p.name));
+            patientRow.model = patientModel;
+            patientRow._patientIds = patients.map(p => p.id);
+
+            const lconf = config.get('librelink') || {};
+            let selectedIndex = 0;
+            
+            if (lconf.patientId) {
+                const foundIndex = patients.findIndex(p => p.id === lconf.patientId);
+                if (foundIndex >= 0) {
+                    selectedIndex = foundIndex;
+                } else {
+                    lconf.patientId = patients[0].id;
+                    lconf.patientName = patients[0].name;
+                    config.set('librelink', lconf);
+                    selectedIndex = 0;
+                }
+            } else {
+                lconf.patientId = patients[0].id;
+                lconf.patientName = patients[0].name;
+                config.set('librelink', lconf);
+                selectedIndex = 0;
+            }
+            
+            patientRow.selected = selectedIndex;
+            const displayName = lconf.patientName || patients[selectedIndex].name;
+            patientInfoLabel.set_label(`Selected patient: ${displayName}`);
+            
+            provider.destroy();
+        };
+
+        populatePatients();
+     
+        // Save to config and refresh label/select when selection changes
+         patientRow.connect('notify::selected', () => {
+            if (!patientRow._patientIds) return;
+            
+            const selectedIdx = patientRow.selected;
+            const selectedId = patientRow._patientIds[selectedIdx];
+            const selectedName = patientRow.model.get_string(selectedIdx);
+            
+            let lconf = config.get('librelink') || {};
+            lconf.patientId = selectedId;
+            lconf.patientName = selectedName; // Store the name
+            config.set('librelink', lconf);
+            
+            patientInfoLabel.set_label(`Selected patient: ${selectedName}`);
+        });
 
         // LibreLink test connection button - UPDATED for secure password handling
         const testLibreLinkConnection = async (button) => {
             const librelinkCurrentConfig = config.get('librelink') || {};
-            
+
             if (!librelinkCurrentConfig.email) {
                 showToast(window, 'Please enter LibreLink email first');
                 return;
             }
-
             if (!passwordRow.text) {
                 showToast(window, 'Please enter LibreLink password first');
                 return;
             }
-
+            
             button.label = _('Testing...');
             button.sensitive = false;
 
             try {
                 // Store password securely in keyring first
                 const storeSuccess = await config.storeLibreLinkPassword(passwordRow.text);
-                if (!storeSuccess) {
-                    throw new Error('Failed to store password securely');
-                }
+                if (!storeSuccess) throw new Error('Failed to store password securely');
+                passwordRow.text = ""; // Clear for security
 
-                // Import the LibreLinkProvider for testing
-                const { LibreLinkProvider } = await import('./providers/LibreLinkProvider.js');
+                // Save current patient name BEFORE any operations
+                const currentConfig = config.get('librelink') || {};
+                const currentPatientName = currentConfig.patientName;
+                const currentPatientId = currentConfig.patientId;
+
+                // Test connection
                 const provider = new LibreLinkProvider(config, (message) => {
                     console.log(`[CGM LibreLink Test] ${message}`);
                 });
-
-                // Test the connection
+                
                 try {
                     const data = await provider.fetchCurrent();
                     if (data && data.sgv) {
@@ -287,10 +382,22 @@ export default class CGMPreferences extends ExtensionPreferences {
                     }
                 } catch (fetchError) {
                     console.error('LibreLink test error:', fetchError);
-                    showToast(window, `✗ LibreLink Failed: ${fetchError.message}`);
-                } finally {
-                    provider.destroy();
+                    showToast(window, `⚠ Connected but data fetch failed: ${fetchError.message}`);
                 }
+
+                // Populate patients after connection test
+                await populatePatients();
+                
+                // Restore patient name if we had one and patient ID didn't change
+                const updatedConfig = config.get('librelink') || {};
+                if (currentPatientName && updatedConfig.patientId === currentPatientId) {
+                    updatedConfig.patientName = currentPatientName;
+                    config.set('librelink', updatedConfig);
+                    patientInfoLabel.set_label(`Selected patient: ${currentPatientName}`);
+                }
+                
+                provider.destroy();
+
             } catch (error) {
                 console.error('Failed to test LibreLink connection:', error);
                 showToast(window, `✗ LibreLink Failed: ${error.message}`);
@@ -302,6 +409,7 @@ export default class CGMPreferences extends ExtensionPreferences {
             }
         };
 
+        // Button
         const librelinkTestButton = new Gtk.Button({
             label: _('Test LibreLink Connection'),
             css_classes: ['suggested-action'],
@@ -309,7 +417,6 @@ export default class CGMPreferences extends ExtensionPreferences {
         librelinkTestButton.connect('clicked', () => {
             testLibreLinkConnection(librelinkTestButton);
         });
-
         const librelinkTestRow = new Adw.ActionRow({
             title: _('Test LibreLink Connection'),
             subtitle: _('Verify your LibreLink credentials work correctly'),
@@ -343,7 +450,6 @@ export default class CGMPreferences extends ExtensionPreferences {
         clearCredentialsRow.add_suffix(clearCredentialsButton);
         librelinkGroup.add(clearCredentialsRow);
 
-        // [Rest of the file remains the same - glucose thresholds, display settings, etc.]
         // Glucose thresholds group
         const thresholdGroup = new Adw.PreferencesGroup({
             title: _('Glucose Thresholds'),

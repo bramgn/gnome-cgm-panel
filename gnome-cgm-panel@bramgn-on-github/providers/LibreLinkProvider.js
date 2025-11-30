@@ -3,6 +3,7 @@ import Soup from 'gi://Soup';
 import GLib from 'gi://GLib';
 import { BaseProvider } from './BaseProvider.js';
 
+
 const REGIONAL_URLS = {
     'EU': 'https://api-eu.libreview.io',
     'US': 'https://api.libreview.io',
@@ -34,9 +35,10 @@ export class LibreLinkProvider extends BaseProvider {
         });
         this.authToken = null;
         this.tokenExpiry = null;
-        this.patientId = null;
         this.accountId = null;
     }
+
+
 
     isConfigured() {
         const librelinkConfig = this.config.get('librelink');
@@ -74,16 +76,17 @@ export class LibreLinkProvider extends BaseProvider {
 
     async _login() {
         return new Promise(async (resolve, reject) => {
-            const librelinkConfig = this.config.get('librelink');
+            // Get configuration and password FIRST, before creating the URL
+            const librelinkConfig = this.config.get('librelink') || {};
             const apiUrl = this._getApiUrl();
-            const url = `${apiUrl}/llu/auth/login`;
-            
+            const loginUrl = `${apiUrl}/llu/auth/login`; 
+
             this.log(`LibreLink login attempt:`);
             this.log(`- API URL: ${apiUrl}`);
             this.log(`- Region: ${librelinkConfig.region || 'EU'}`);
             this.log(`- Email: ${librelinkConfig.email ? `${librelinkConfig.email.substring(0, 3)}***` : 'NOT SET'}`);
             this.log(`- Password: [RETRIEVING FROM KEYRING]`);
-            
+
             try {
                 // Get password securely from keyring
                 const password = await this._getPassword();
@@ -93,8 +96,8 @@ export class LibreLinkProvider extends BaseProvider {
                     password: password
                 };
 
-                this.log(`Sending login request to: ${url}`);
-                const message = Soup.Message.new('POST', url);
+                this.log(`Sending login request to: ${loginUrl}`);
+                const message = Soup.Message.new('POST', loginUrl);
                 
                 // Set required headers
                 Object.entries(REQUIRED_HEADERS).forEach(([key, value]) => {
@@ -153,22 +156,14 @@ export class LibreLinkProvider extends BaseProvider {
         });
     }
 
-    async _getPatientId() {
+    // Add option to select Patient
+    async getPatients() {
+        await this._ensureAuthenticated();         
+        const apiUrl = this._getApiUrl();
+        const url = `${apiUrl}/llu/connections`;
+
         return new Promise((resolve, reject) => {
-            // If we already have a patient ID and it's configured, use it
-            const librelinkConfig = this.config.get('librelink');
-            if (librelinkConfig.patientId) {
-                this.patientId = librelinkConfig.patientId;
-                resolve(this.patientId);
-                return;
-            }
-
-            const apiUrl = this._getApiUrl();
-            const url = `${apiUrl}/llu/connections`;
-
-            this.log(`Getting LibreLink connections: ${url}`);
             const message = Soup.Message.new('GET', url);
-            
             // Set required headers including auth
             Object.entries(REQUIRED_HEADERS).forEach(([key, value]) => {
                 message.get_request_headers().append(key, value);
@@ -181,61 +176,85 @@ export class LibreLinkProvider extends BaseProvider {
                     const bytes = session.send_and_read_finish(result);
                     const decoder = new TextDecoder('utf-8');
                     const response = decoder.decode(bytes.get_data());
+
+                    const status = message.get_status();
+                    this.log(`getPatients HTTP Status: ${status}`);
                     
+                    // Check HTTP status first
+                    if (status !== 200) {
+                        throw new Error(`HTTP ${status}: Failed to fetch patients`);
+                    }
+
                     if (!response || response.trim() === '') {
                         throw new Error('Empty response from LibreLink connections');
                     }
-                    
+
                     const data = JSON.parse(response);
+                    this.log(`Raw LibreLink connections: ${JSON.stringify(data.data, null, 2)}`);
                     
+                    // Check API response status
                     if (data.status !== 0) {
-                        throw new Error(`Failed to get connections: ${data.error || 'Unknown error'}`);
+                        throw new Error(`API Error: ${data.error?.description || data.error || 'Unknown error'}`);
                     }
-
+                    
                     if (!data.data || !Array.isArray(data.data) || data.data.length === 0) {
-                        throw new Error('No connections found - ensure someone is sharing their data with you');
+                        throw new Error('No connections found.');
                     }
 
-                    // Use the first patient
-                    this.patientId = data.data[0].patientId;
-                    
-                    // Save patient ID to config for future use
-                    const newConfig = this.config.get('librelink');
-                    newConfig.patientId = this.patientId;
-                    this.config.set('librelink', newConfig);
-                    
-                    this.log(`Found patient ID: ${this.patientId}`);
-                    resolve(this.patientId);
-                    
+                    // Map name
+                    resolve(
+                        data.data.map(conn => ({
+                            id: conn.patientId,
+                            name: (conn.firstName && conn.lastName)
+                                ? `${conn.firstName} ${conn.lastName}`
+                                : conn.patientId // fallback if no name
+                        }))
+                    );
                 } catch (error) {
-                    this.log(`LibreLink connections error: ${error.message}`);
+                    this.log(`getPatients error: ${error.message}`);
                     reject(error);
                 }
             });
         });
     }
+    
+    // Only use config value for patientId
+    async _getPatientId() {
+        const librelinkConfig = this.config.get('librelink');
+        if (librelinkConfig && librelinkConfig.patientId) {
+            return librelinkConfig.patientId;
+        }
+        
+        // If no patient selected, get list and use first one
+        try {
+            const patients = await this.getPatients();
+            if (patients && patients.length > 0) {
+                const currentConfig = this.config.get('librelink') || {};
+                currentConfig.patientId = patients[0].id;
+                this.config.set('librelink', currentConfig);
+                return patients[0].id;
+            }
+        } catch (error) {
+            this.log(`Failed to auto-select patient: ${error.message}`);
+        }
+        
+        throw new Error("No patientId configured and no patients available.");
+    }
 
     async _ensureAuthenticated() {
-        if (this._isTokenValid() && this.patientId) {
-            return; // Already authenticated
-        }
-
         // Login if needed
         if (!this._isTokenValid()) {
             await this._login();
         }
-
-        // Get patient ID if needed
-        if (!this.patientId) {
-            await this._getPatientId();
-        }
     }
 
     async _fetchGlucoseData() {
-        return new Promise((resolve, reject) => {
-            const apiUrl = this._getApiUrl();
-            const url = `${apiUrl}/llu/connections/${this.patientId}/graph`;
+        // Get patientId FIRST before creating the Promise
+        const patientId = await this._getPatientId();
+        const apiUrl = this._getApiUrl();
+        const url = `${apiUrl}/llu/connections/${patientId}/graph`;
 
+        return new Promise((resolve, reject) => {
             this.log(`Fetching LibreLink glucose data: ${url}`);
             const message = Soup.Message.new('GET', url);
             
@@ -344,6 +363,7 @@ export class LibreLinkProvider extends BaseProvider {
         return 1;
     }
 
+
     destroy() {
         if (this.session) {
             this.session.abort();
@@ -351,7 +371,6 @@ export class LibreLinkProvider extends BaseProvider {
         }
         this.authToken = null;
         this.tokenExpiry = null;
-        this.patientId = null;
         this.accountId = null;
-    }
+        }
 }

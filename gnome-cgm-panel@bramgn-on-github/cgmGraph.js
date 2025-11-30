@@ -213,12 +213,6 @@ export class CGMGraph {
             let currentTimeDiff = currentPoint.time - startTime;
             let nextTimeDiff = nextPoint.time - startTime;
 
-            let timeBetweenPoints = nextPoint.time - currentPoint.time;
-            let maxGapMinutes = 5;
-            if (timeBetweenPoints > maxGapMinutes * 60 * 1000) {
-                continue; // Skip drawing this segment
-            }
-
             // Skip this segment if either point is outside the visible time window
             if (currentTimeDiff < 0 || nextTimeDiff < 0 ||
                 currentTimeDiff > timeRange || nextTimeDiff > timeRange) {
