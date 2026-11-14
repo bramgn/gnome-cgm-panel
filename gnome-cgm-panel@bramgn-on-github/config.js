@@ -3,11 +3,13 @@ import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Secret from 'gi://Secret';
 
+Gio._promisify(Gio.File.prototype, 'load_contents_async', 'load_contents_finish');
+
 export class Config {
     constructor() {
         this.configDir = GLib.get_user_config_dir() + '/cgm-widget';
         this.configFile = this.configDir + '/config.json';
-        this._config = this._loadConfig();
+        this._config = this._getDefaultConfig();
         
         // Define the schema once
         this._schema = new Secret.Schema(
@@ -21,47 +23,66 @@ export class Config {
         );
     }
 
-    _loadConfig() {
+    /**
+     * Reads config.json asynchronously. Must be awaited once after construction
+     * (and again on reload) before get() returns user values.
+     */
+    async load() {
+        this._config = await this._loadConfig();
+    }
+
+    async _loadConfig() {
+        const defaultConfig = this._getDefaultConfig();
         try {
             const file = Gio.File.new_for_path(this.configFile);
-            if (!file.query_exists(null)) {
-                this._createDefaultConfig();
-                return this._getDefaultConfig();
+            let contents;
+            try {
+                [contents] = await file.load_contents_async(null);
+            } catch (e) {
+                if (e.matches?.(Gio.IOErrorEnum, Gio.IOErrorEnum.NOT_FOUND)) {
+                    this._createDefaultConfig();
+                    return defaultConfig;
+                }
+                throw e;
             }
 
-            const [success, contents] = file.load_contents(null);
-            if (success) {
-                const decoder = new TextDecoder('utf-8');
-                const configText = decoder.decode(contents);
-                const defaultConfig = this._getDefaultConfig();
-                const userConfig = JSON.parse(configText);
+            const configText = new TextDecoder('utf-8').decode(contents);
+            const userConfig = JSON.parse(configText);
 
-                const mergedConfig = { ...defaultConfig, ...userConfig };
+            const mergedConfig = { ...defaultConfig, ...userConfig };
 
-                // If units are in mmol/L, convert thresholds to mg/dL for internal use
-                if (mergedConfig.units === 'mmol/L') {
-                    mergedConfig.thresholds.low = Math.round(mergedConfig.thresholds.low * 18);
-                    mergedConfig.thresholds.high = Math.round(mergedConfig.thresholds.high * 18);
-                }
-
-                // Deep merge for nested objects
-                if (userConfig.thresholds) {
-                    mergedConfig.thresholds = { ...defaultConfig.thresholds, ...mergedConfig.thresholds };
-                }
-                if (userConfig.notifications) {
-                    mergedConfig.notifications = { ...defaultConfig.notifications, ...userConfig.notifications };
-                }
-                if (userConfig.colors) {
-                    mergedConfig.colors = { ...defaultConfig.colors, ...userConfig.colors };
-                }
-
-                return { ...defaultConfig, ...mergedConfig };
+            // If units are in mmol/L, convert thresholds to mg/dL for internal use
+            if (mergedConfig.units === 'mmol/L') {
+                mergedConfig.thresholds.low = Math.round(mergedConfig.thresholds.low * 18);
+                mergedConfig.thresholds.high = Math.round(mergedConfig.thresholds.high * 18);
             }
+
+            // Deep merge for nested objects
+            if (userConfig.thresholds) {
+                mergedConfig.thresholds = { ...defaultConfig.thresholds, ...mergedConfig.thresholds };
+            }
+            if (userConfig.notifications) {
+                mergedConfig.notifications = { ...defaultConfig.notifications, ...userConfig.notifications };
+            }
+            if (userConfig.colors) {
+                mergedConfig.colors = { ...defaultConfig.colors, ...userConfig.colors };
+            }
+
+            return { ...defaultConfig, ...mergedConfig };
         } catch (error) {
-            console.error('Error loading CGM config:', error);
+            this._error('Error loading CGM config:', error);
         }
 
-        return this._getDefaultConfig();
+        return defaultConfig;
+    }
+
+    _error(...args) {
+        console.error('[CGM Widget]', ...args);
+    }
+
+    _log(...args) {
+        if (this._config?.debug)
+            console.log('[CGM Widget]', ...args);
     }
 
     // config.js - Updated _getDefaultConfig() method
@@ -93,7 +114,7 @@ export class Config {
 
     _createDefaultConfig() {
         this._saveConfig(this._getDefaultConfig());
-        console.log(`Created default CGM config at: ${this.configFile}`);
+        this._log(`Created default CGM config at: ${this.configFile}`);
     }
 
     get(key) {
@@ -112,7 +133,7 @@ export class Config {
     // SIMPLIFIED PASSWORD MANAGEMENT
     async storeLibreLinkPassword(password) {
         try {
-            console.log('Storing LibreLink password for:', this._config.librelink.email);
+            this._log('Storing LibreLink password');
             
             const attributes = {
                 'service': 'librelink',
@@ -130,11 +151,11 @@ export class Config {
                 null
             );
             
-            console.log('Password store result:', success);
+            this._log('Password store result:', success);
             return success;
             
         } catch (error) {
-            console.error('Error storing LibreLink password:', error);
+            this._error('Error storing LibreLink password:', error);
             return false;
         }
     }
@@ -154,11 +175,11 @@ export class Config {
                 null
             );
             
-            console.log('Password lookup result:', password ? 'Found' : 'Not found');
+            this._log('Password lookup result:', password ? 'Found' : 'Not found');
             return password;
             
         } catch (error) {
-            console.error('Error retrieving LibreLink password:', error);
+            this._error('Error retrieving LibreLink password:', error);
             return null;
         }
     }
@@ -177,11 +198,11 @@ export class Config {
                 null
             );
             
-            console.log('Password clear result:', success);
+            this._log('Password clear result:', success);
             return success;
             
         } catch (error) {
-            console.error('Error clearing LibreLink password:', error);
+            this._error('Error clearing LibreLink password:', error);
             return false;
         }
     }
@@ -206,11 +227,11 @@ export class Config {
                 Gio.FileCreateFlags.PRIVATE, null);
                 
         } catch (error) {
-            console.error('Error saving CGM config:', error);
+            this._error('Error saving CGM config:', error);
         }
     }
 
-    reload() {
-        this._config = this._loadConfig();
+    async reload() {
+        await this.load();
     }
 }

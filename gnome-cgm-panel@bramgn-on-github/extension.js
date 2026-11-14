@@ -65,7 +65,13 @@ class MyExtension extends PanelMenu.Button {
         // Load config and cache
         this._config = new Config();
         this._cache = new Cache();
-        
+    }
+
+    // Async startup: config and cache are read from disk without blocking the shell.
+    async start() {
+        await Promise.all([this._config.load(), this._cache.init()]);
+        if (this._isDestroyed) return;
+
         // Monitor config file for changes
         this._setupConfigMonitor();
         
@@ -128,7 +134,7 @@ class MyExtension extends PanelMenu.Button {
         const configDir = Gio.File.new_for_path(this._config.configDir);
         if (configDir.query_exists(null)) {
             this._monitor = configDir.monitor(Gio.FileMonitorFlags.NONE, null);
-            this._monitor.connect('changed', (monitor, file, otherFile, eventType) => {
+            this._monitorId = this._monitor.connect('changed', (monitor, file, otherFile, eventType) => {
                 if (file.get_basename() === 'config.json' && 
                    (eventType === Gio.FileMonitorEvent.CHANGED || eventType === Gio.FileMonitorEvent.CREATED)) {
                     this._log('Config file changed, reloading...');
@@ -219,7 +225,7 @@ class MyExtension extends PanelMenu.Button {
     
     _setupEventHandlers() {
         // Handle popup open/close
-        this.menu.connect('open-state-changed', (menu, open) => {
+        this._menuStateId = this.menu.connect('open-state-changed', (menu, open) => {
             if (open && !this._isDestroyed) {
                 // Refresh data when popup opens if it's been a while
                 const now = Date.now();
@@ -259,7 +265,7 @@ class MyExtension extends PanelMenu.Button {
         });
     }
    
-    _reloadConfig() {
+    async _reloadConfig() {
         if (this._isDestroyed) return;
         this._log('Reloading configuration...');
         
@@ -268,7 +274,8 @@ class MyExtension extends PanelMenu.Button {
         const oldProvider = this._config.get('provider') || 'nightscout';
         const oldUnits = this._config.get('units') || 'mg/dL';
         
-        this._config.reload();
+        await this._config.reload();
+        if (this._isDestroyed) return;
         this._debugEnabled = this._config.get('debug');
         this._initializeConfig();
         
@@ -685,7 +692,13 @@ class MyExtension extends PanelMenu.Button {
             if (timeout) GLib.Source.remove(timeout);
         });
         
-        if (this._monitor) this._monitor.cancel();
+        if (this._monitor) {
+            if (this._monitorId) this._monitor.disconnect(this._monitorId);
+            this._monitor.cancel();
+        }
+        if (this._menuStateId) this.menu.disconnect(this._menuStateId);
+        this._monitorId = null;
+        this._menuStateId = null;
         if (this._session) this._session.abort();
         
         // Clear references
@@ -869,18 +882,15 @@ export default class CGMWidgetExtension extends Extension {
     }
 
     enable() {
-        console.log('Enabling CGM extension...');
         this.extension = new MyExtension(this);
         Main.panel.addToStatusArea('nightscout-cgm', this.extension);
-        console.log('CGM extension enabled successfully');
+        this.extension.start().catch(error => console.error('CGM start failed:', error));
     }
     
     disable() {
-        console.log('Disabling CGM extension...');
         if (this.extension) {
             this.extension.destroy();
             this.extension = null;
         }
-        console.log('CGM extension disabled successfully');
     }
 }

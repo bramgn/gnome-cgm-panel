@@ -11,9 +11,10 @@ import { LibreLinkProvider } from './providers/LibreLinkProvider.js';
 import { Config } from './config.js';
 
 export default class CGMPreferences extends ExtensionPreferences {
-    fillPreferencesWindow(window) {
+    async fillPreferencesWindow(window) {
         // Make all objects local to this function to avoid storing them as instance properties
         const config = new Config();
+        await config.load();
         let testSession = null; // Track session for cleanup
         
         // Setup cleanup on window close
