@@ -277,7 +277,15 @@ export default class CGMPreferences extends ExtensionPreferences {
             patientInfoLabel.set_label(_('Loading patients...'));
             
             const provider = new LibreLinkProvider(config, console.log);
-            const patients = await provider.getPatients();
+            let patients;
+            try {
+                patients = await provider.getPatients();
+            } catch (error) {
+                // Expected when LibreLink isn't configured (no email/password in keyring yet)
+                patientInfoLabel.set_label(_('Enter your LibreLink credentials to load patients.'));
+                provider.destroy();
+                return;
+            }
 
             if (!patients || patients.length === 0) {
                 patientInfoLabel.set_label(_('No patients found or no data shared.'));
@@ -317,7 +325,7 @@ export default class CGMPreferences extends ExtensionPreferences {
             provider.destroy();
         };
 
-        populatePatients();
+        populatePatients().catch(error => console.error('Failed to load patients:', error));
      
         // Save to config and refresh label/select when selection changes
          patientRow.connect('notify::selected', () => {
